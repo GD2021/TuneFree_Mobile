@@ -1,5 +1,6 @@
 {
   "name": "TuneFree Mobile",
   "description": "A high-performance, iOS-styled music player using the TuneFree API. Features glassmorphism UI, real-time lyrics, and PWA support.",
+  "version": "1.3.0",
   "requestFramePermissions": []
 }

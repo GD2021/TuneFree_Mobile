@@ -3,21 +3,16 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { Song, Playlist } from "../types";
 import { DEFAULT_API_BASE } from "../services/api";
 
-interface LibraryContextType {
+interface LibraryDataContextType {
   favorites: Song[];
   playlists: Playlist[];
-  apiKey: string;
-  corsProxy: string;
-  apiBase: string;
-  setApiKey: (key: string) => void;
-  setCorsProxy: (url: string) => void;
-  setApiBase: (url: string) => void;
   toggleFavorite: (song: Song) => void;
   isFavorite: (songId: number | string) => boolean;
   createPlaylist: (name: string, initialSongs?: Song[]) => void;
@@ -30,11 +25,50 @@ interface LibraryContextType {
   importData: (jsonData: string) => boolean;
 }
 
-const LibraryContext = createContext<LibraryContextType | undefined>(undefined);
+interface LibrarySettingsContextType {
+  apiKey: string;
+  corsProxy: string;
+  apiBase: string;
+  setApiKey: (key: string) => void;
+  setCorsProxy: (url: string) => void;
+  setApiBase: (url: string) => void;
+}
 
-// 默认代理为空字符串，避免保存设置时把 corsproxy.io 写入 localStorage
-// 从而覆盖 api.ts 中的自建代理优先逻辑（getProxies() 会在空值时回退到自建代理）
+export interface LibraryContextType
+  extends LibraryDataContextType, LibrarySettingsContextType {}
+
 const DEFAULT_PROXY = "";
+
+const LIBRARY_DATA_DEFAULTS: LibraryDataContextType = {
+  favorites: [],
+  playlists: [],
+  toggleFavorite: () => {},
+  isFavorite: () => false,
+  createPlaylist: () => {},
+  importPlaylist: () => {},
+  renamePlaylist: () => {},
+  deletePlaylist: () => {},
+  addToPlaylist: () => {},
+  removeFromPlaylist: () => {},
+  exportData: () => {},
+  importData: () => false,
+};
+
+const LIBRARY_SETTINGS_DEFAULTS: LibrarySettingsContextType = {
+  apiKey: "",
+  corsProxy: "",
+  apiBase: DEFAULT_API_BASE,
+  setApiKey: () => {},
+  setCorsProxy: () => {},
+  setApiBase: () => {},
+};
+
+const LibraryDataContext = createContext<LibraryDataContextType>(
+  LIBRARY_DATA_DEFAULTS,
+);
+const LibrarySettingsContext = createContext<LibrarySettingsContextType>(
+  LIBRARY_SETTINGS_DEFAULTS,
+);
 
 export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -51,17 +85,17 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
     () => localStorage.getItem("tunefree_api_base") || DEFAULT_API_BASE,
   );
 
-  // Refs 用于 exportData，使其引用始终稳定（不随 favorites/playlists 变化重建）
   const favoritesRef = useRef(favorites);
   const playlistsRef = useRef(playlists);
+
   useEffect(() => {
     favoritesRef.current = favorites;
   }, [favorites]);
+
   useEffect(() => {
     playlistsRef.current = playlists;
   }, [playlists]);
 
-  // 初始化：从 localStorage 加载数据
   useEffect(() => {
     try {
       const storedFavs = localStorage.getItem("tunefree_favorites");
@@ -69,11 +103,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
       if (storedFavs) setFavorites(JSON.parse(storedFavs));
       if (storedPlaylists) setPlaylists(JSON.parse(storedPlaylists));
     } catch {
-      // 数据损坏时静默忽略，使用默认空数据
+      // ignore corrupted data
     }
   }, []);
 
-  // 持久化
   useEffect(() => {
     localStorage.setItem("tunefree_favorites", JSON.stringify(favorites));
   }, [favorites]);
@@ -81,10 +114,6 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     localStorage.setItem("tunefree_playlists", JSON.stringify(playlists));
   }, [playlists]);
-
-  // ==============================
-  // 设置项
-  // ==============================
 
   const setApiKey = useCallback((key: string) => {
     setApiKeyInternal(key);
@@ -97,15 +126,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const setApiBase = useCallback((url: string) => {
-    // 移除末尾斜杠
     const cleanUrl = url.endsWith("/") ? url.slice(0, -1) : url;
     setApiBaseInternal(cleanUrl);
     localStorage.setItem("tunefree_api_base", cleanUrl);
   }, []);
-
-  // ==============================
-  // 收藏
-  // ==============================
 
   const toggleFavorite = useCallback((song: Song) => {
     setFavorites((prev) => {
@@ -116,19 +140,11 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   }, []);
 
-  /**
-   * isFavorite 读取 favorites 状态，需要跟随其变化，所以依赖 favorites。
-   * 由于只在用户交互（收藏按钮）和渲染时调用，dep 随 favorites 变化可接受。
-   */
   const isFavorite = useCallback(
     (songId: number | string) =>
       favorites.some((s) => String(s.id) === String(songId)),
     [favorites],
   );
-
-  // ==============================
-  // 歌单
-  // ==============================
 
   const createPlaylist = useCallback(
     (name: string, initialSongs: Song[] = []) => {
@@ -188,14 +204,6 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  // ==============================
-  // 数据导入 / 导出
-  // ==============================
-
-  /**
-   * exportData 使用 favoritesRef / playlistsRef 避免闭包陈旧，
-   * 引用永久稳定，不会因 favorites/playlists 变化重建。
-   */
   const exportData = useCallback(() => {
     const data = {
       version: 4,
@@ -225,61 +233,66 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
+  const dataValue = useMemo<LibraryDataContextType>(
+    () => ({
+      favorites,
+      playlists,
+      toggleFavorite,
+      isFavorite,
+      createPlaylist,
+      importPlaylist,
+      renamePlaylist,
+      deletePlaylist,
+      addToPlaylist,
+      removeFromPlaylist,
+      exportData,
+      importData,
+    }),
+    [
+      favorites,
+      playlists,
+      toggleFavorite,
+      isFavorite,
+      createPlaylist,
+      importPlaylist,
+      renamePlaylist,
+      deletePlaylist,
+      addToPlaylist,
+      removeFromPlaylist,
+      exportData,
+      importData,
+    ],
+  );
+
+  const settingsValue = useMemo<LibrarySettingsContextType>(
+    () => ({
+      apiKey,
+      corsProxy,
+      apiBase,
+      setApiKey,
+      setCorsProxy,
+      setApiBase,
+    }),
+    [apiKey, corsProxy, apiBase, setApiKey, setCorsProxy, setApiBase],
+  );
+
   return (
-    <LibraryContext.Provider
-      value={{
-        favorites,
-        playlists,
-        apiKey,
-        corsProxy,
-        apiBase,
-        setApiKey,
-        setCorsProxy,
-        setApiBase,
-        toggleFavorite,
-        isFavorite,
-        createPlaylist,
-        importPlaylist,
-        renamePlaylist,
-        deletePlaylist,
-        addToPlaylist,
-        removeFromPlaylist,
-        exportData,
-        importData,
-      }}
-    >
-      {children}
-    </LibraryContext.Provider>
+    <LibrarySettingsContext.Provider value={settingsValue}>
+      <LibraryDataContext.Provider value={dataValue}>
+        {children}
+      </LibraryDataContext.Provider>
+    </LibrarySettingsContext.Provider>
   );
 };
 
-// HMR 热更新时 Provider 可能暂时不可用，返回安全默认值避免崩溃
-const LIBRARY_DEFAULTS: LibraryContextType = {
-  favorites: [],
-  playlists: [],
-  apiKey: "",
-  corsProxy: "",
-  apiBase: DEFAULT_API_BASE,
-  setApiKey: () => {},
-  setCorsProxy: () => {},
-  setApiBase: () => {},
-  toggleFavorite: () => {},
-  isFavorite: () => false,
-  createPlaylist: () => {},
-  importPlaylist: () => {},
-  renamePlaylist: () => {},
-  deletePlaylist: () => {},
-  addToPlaylist: () => {},
-  removeFromPlaylist: () => {},
-  exportData: () => {},
-  importData: () => false,
-};
+export const useLibraryData = () => useContext(LibraryDataContext);
+export const useLibrarySettings = () => useContext(LibrarySettingsContext);
 
-export const useLibrary = () => {
-  const context = useContext(LibraryContext);
-  if (!context) {
-    console.warn("[useLibrary] Provider 未就绪，返回默认值（HMR 热更新中）");
-    return LIBRARY_DEFAULTS;
-  }
-  return context;
+export const useLibrary = (): LibraryContextType => {
+  const data = useLibraryData();
+  const settings = useLibrarySettings();
+  return {
+    ...data,
+    ...settings,
+  };
 };

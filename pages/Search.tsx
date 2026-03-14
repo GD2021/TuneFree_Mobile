@@ -1,12 +1,14 @@
 import React, { useState, useEffect, memo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
+import { FixedSizeList as List, ListChildComponentProps } from "react-window";
 import {
   searchAggregate,
   searchSongs,
   getImgReferrerPolicy,
 } from "../services/api";
+import { prefetchImage } from "../utils/imageCache";
 import { Song } from "../types";
-import { usePlayer } from "../contexts/PlayerContext";
+import { usePlayerState, usePlayerActions } from "../contexts/PlayerContext";
 import { SearchIcon, MusicIcon, TrashIcon } from "../components/Icons";
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -24,13 +26,16 @@ const SearchResultItem = memo<{
   isCurrent: boolean;
   isPlaying: boolean;
   onPlay: (song: Song) => void;
-}>(({ song, isCurrent, isPlaying, onPlay }) => {
+  onPrefetch: (song: Song) => void;
+}>(({ song, isCurrent, isPlaying, onPlay, onPrefetch }) => {
   const songName = typeof song.name === "string" ? song.name : "未知歌曲";
   const songArtist = typeof song.artist === "string" ? song.artist : "未知歌手";
 
   return (
     <div
       className={`flex items-center space-x-3 p-3 rounded-xl transition cursor-pointer ${isCurrent ? "bg-white shadow-sm ring-1 ring-ios-red/20" : "hover:bg-white/50 active:bg-white"}`}
+      onMouseEnter={() => onPrefetch(song)}
+      onTouchStart={() => onPrefetch(song)}
       onClick={() => onPlay(song)}
     >
       <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100 flex items-center justify-center">
@@ -40,6 +45,7 @@ const SearchResultItem = memo<{
             alt={songName}
             referrerPolicy={getImgReferrerPolicy(song.pic)}
             loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover"
           />
         ) : (
@@ -118,6 +124,9 @@ const Search: React.FC = () => {
       return [];
     }
   });
+  const [windowHeight, setWindowHeight] = useState<number>(
+    () => window.innerHeight,
+  );
 
   useEffect(() => {
     const q = searchParams.get("q");
@@ -126,8 +135,15 @@ const Search: React.FC = () => {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    const handleResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const debouncedQuery = useDebounce(query, 800);
-  const { playSong, currentSong, isPlaying } = usePlayer();
+  const { currentSong, isPlaying } = usePlayerState();
+  const { playSong, prefetchSong } = usePlayerActions();
 
   useEffect(() => {
     localStorage.setItem("tunefree_search_history", JSON.stringify(history));
@@ -202,6 +218,14 @@ const Search: React.FC = () => {
       playSong(song);
     },
     [query, playSong, addToHistory],
+  );
+
+  const handlePrefetch = useCallback(
+    (song: Song) => {
+      prefetchSong(song);
+      prefetchImage(song.pic);
+    },
+    [prefetchSong],
   );
 
   const handleKeyDown = useCallback(
@@ -315,16 +339,32 @@ const Search: React.FC = () => {
           </div>
         )}
 
-        {results.length > 0 &&
-          results.map((song, idx) => (
-            <SearchResultItem
-              key={`${song.source}-${song.id}-${idx}`}
-              song={song}
-              isCurrent={currentSong?.id === song.id}
-              isPlaying={isPlaying}
-              onPlay={handlePlaySong}
-            />
-          ))}
+        {results.length > 0 && (
+          <List
+            height={Math.max(240, windowHeight - 320)}
+            itemCount={results.length}
+            itemSize={84}
+            width="100%"
+            itemKey={(index) => `${results[index].source}-${results[index].id}`}
+            overscanCount={6}
+          >
+            {({ index, style }: ListChildComponentProps) => {
+              const song = results[index];
+              return (
+                <div style={style}>
+                  <SearchResultItem
+                    key={`${song.source}-${song.id}-${index}`}
+                    song={song}
+                    isCurrent={currentSong?.id === song.id}
+                    isPlaying={isPlaying}
+                    onPlay={handlePlaySong}
+                    onPrefetch={handlePrefetch}
+                  />
+                </div>
+              );
+            }}
+          </List>
+        )}
 
         {isSearching && results.length === 0 && <SearchSkeleton />}
 

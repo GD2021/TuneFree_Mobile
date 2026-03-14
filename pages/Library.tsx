@@ -1,11 +1,13 @@
-import React, { useState, useMemo, useCallback } from "react";
-import { usePlayer } from "../contexts/PlayerContext";
-import { useLibrary } from "../contexts/LibraryContext";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { FixedSizeList as List } from "react-window";
+import { usePlayerActions } from "../contexts/PlayerContext";
+import { useLibraryData, useLibrarySettings } from "../contexts/LibraryContext";
 import {
   getPlaylistDetail,
   DEFAULT_API_BASE,
   getImgReferrerPolicy,
 } from "../services/api";
+import { prefetchImage } from "../utils/imageCache";
 import { Song } from "../types";
 import {
   HeartFillIcon,
@@ -43,16 +45,10 @@ const useToast = () => {
 };
 
 const Library: React.FC = () => {
-  const { queue, playSong } = usePlayer();
+  const { playSong, prefetchSong } = usePlayerActions();
   const {
     favorites,
     playlists,
-    apiKey,
-    corsProxy,
-    apiBase,
-    setApiKey,
-    setCorsProxy,
-    setApiBase,
     createPlaylist,
     importPlaylist,
     deletePlaylist,
@@ -61,7 +57,9 @@ const Library: React.FC = () => {
     renamePlaylist,
     exportData,
     importData,
-  } = useLibrary();
+  } = useLibraryData();
+  const { apiKey, corsProxy, apiBase, setApiKey, setCorsProxy, setApiBase } =
+    useLibrarySettings();
   const { show: showToast, ToastUI } = useToast();
 
   const [activeTab, setActiveTab] = useState<Tab>("favorites");
@@ -74,6 +72,15 @@ const Library: React.FC = () => {
   const [importSource, setImportSource] = useState("netease");
   const [isImporting, setIsImporting] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [windowHeight, setWindowHeight] = useState<number>(
+    () => window.innerHeight,
+  );
+
+  useEffect(() => {
+    const handleResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const [tempApiKey, setTempApiKey] = useState(apiKey);
   const [tempProxy, setTempProxy] = useState(corsProxy);
@@ -142,58 +149,94 @@ const Library: React.FC = () => {
     songs: Song[],
     canRemove: boolean = false,
     playlistId?: string,
-  ) => (
-    <div className="space-y-3 pb-24">
-      {songs.length === 0 ? (
+  ) => {
+    if (songs.length === 0) {
+      return (
         <div className="text-center py-10 text-gray-400 text-sm">暂无歌曲</div>
-      ) : (
-        songs.map((song, idx) => {
-          const sName = typeof song.name === "string" ? song.name : "未知歌曲";
-          const sArtist =
-            typeof song.artist === "string" ? song.artist : "未知歌手";
+      );
+    }
 
-          return (
-            <div
-              key={`${song.id}-${idx}`}
-              className="flex items-center space-x-3 bg-white p-2 rounded-xl shadow-sm active:scale-[0.98] transition cursor-pointer"
-              onClick={() => playSong(song)}
-            >
-              <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0 flex items-center justify-center">
-                {song.pic ? (
-                  <img
-                    src={song.pic}
-                    alt="art"
-                    referrerPolicy={getImgReferrerPolicy(song.pic)}
-                    loading="lazy"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <MusicIcon className="text-gray-300" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-ios-text text-[15px] font-medium truncate">
-                  {sName}
-                </p>
-                <p className="text-ios-subtext text-xs truncate">{sArtist}</p>
-              </div>
-              {canRemove && playlistId && isEditMode && (
-                <button
-                  className="p-2 text-ios-red/70 hover:text-ios-red bg-ios-red/5 rounded-full"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFromPlaylist(playlistId, song.id);
-                  }}
-                >
-                  <TrashIcon size={16} />
-                </button>
+    const itemSize = 76;
+    const height = Math.max(240, windowHeight - 300);
+
+    const Row = ({
+      index,
+      style,
+    }: {
+      index: number;
+      style: React.CSSProperties;
+    }) => {
+      const song = songs[index];
+      const sName = typeof song.name === "string" ? song.name : "未知歌曲";
+      const sArtist =
+        typeof song.artist === "string" ? song.artist : "未知歌手";
+
+      return (
+        <div style={style} className="px-0 py-1">
+          <div
+            key={`${song.id}-${index}`}
+            className="flex items-center space-x-3 bg-white p-2 rounded-xl shadow-sm active:scale-[0.98] transition cursor-pointer"
+            onMouseEnter={() => {
+              prefetchSong(song);
+              prefetchImage(song.pic);
+            }}
+            onTouchStart={() => {
+              prefetchSong(song);
+              prefetchImage(song.pic);
+            }}
+            onClick={() => playSong(song)}
+          >
+            <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0 flex items-center justify-center">
+              {song.pic ? (
+                <img
+                  src={song.pic}
+                  alt="art"
+                  referrerPolicy={getImgReferrerPolicy(song.pic)}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <MusicIcon className="text-gray-300" />
               )}
             </div>
-          );
-        })
-      )}
-    </div>
-  );
+            <div className="flex-1 min-w-0">
+              <p className="text-ios-text text-[15px] font-medium truncate">
+                {sName}
+              </p>
+              <p className="text-ios-subtext text-xs truncate">{sArtist}</p>
+            </div>
+            {canRemove && playlistId && isEditMode && (
+              <button
+                className="p-2 text-ios-red/70 hover:text-ios-red bg-ios-red/5 rounded-full"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeFromPlaylist(playlistId, song.id);
+                }}
+              >
+                <TrashIcon size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div className="pb-24">
+        <List
+          height={height}
+          itemCount={songs.length}
+          itemSize={itemSize}
+          width="100%"
+          itemKey={(index) => `${songs[index].source}-${songs[index].id}`}
+          overscanCount={6}
+        >
+          {Row}
+        </List>
+      </div>
+    );
+  };
 
   return (
     <>
